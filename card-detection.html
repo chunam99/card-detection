@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      video {
+        transform: rotateY(180deg);
+        -webkit-transform: rotateY(180deg); /* Safari and Chrome */
+        -moz-transform: rotateY(180deg); /* Firefox */
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Load TensorFlow.js. This is required to use coco-ssd model. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <!-- Load the coco-ssd model. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Replace this with your image. Make sure CORS settings allow reading the image! -->
+    <div class="card-wrapper">
+      <div id="camera-section" style="position: relative; width: fit-content">
+        <img
+          id="img"
+          src="./assets/img/outline-front-1.png"
+          style="
+            position: absolute;
+            width: 40%;
+            z-index: 1;
+            left: 50%;
+            top: 47%;
+            transform: translate(-50%, -50%);
+          "
+        />
+        <video id="video"></video>
+        <canvas
+          style="position: absolute; left: 0"
+          width="800"
+          height="600"
+          id="crop-frame"
+        ></canvas>
+
+        <canvas
+          style="position: absolute; left: 0"
+          width="800"
+          height="600"
+          id="boundingBoxCanvas"
+        ></canvas>
+        <div
+          id="countdown"
+          style="
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            font-size: 30px;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            color: white;
+          "
+        ></div>
+      </div>
+      <div id="preview">
+        <img src="" id="preview-img" alt="" />
+      </div>
+    </div>
+
+    <script>
+      let video;
+      let count = 0;
+      let scanning = true;
+      const drawVideo = async () => {
+        video = document.getElementById("video");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+        video.srcObject = stream;
+        await video.play();
+        const cropContext = document
+          .getElementById("crop-frame")
+          .getContext("2d");
+        cocoSsd.load().then(async (model) => {
+          let canvas = document.createElement("canvas");
+          let context = canvas.getContext("2d", {
+            willReadFrequently: true,
+          });
+          const xRatio = (video.clientWidth / 100) * 30;
+          const yRatio = (video.clientHeight / 100) * 30;
+          const widthRatio = (video.clientWidth / 100) * 40;
+          const heightRatio = (video.clientHeight / 100) * 35;
+          const previewImageData = async (imageData) => {
+            const tmpCanvas = document.createElement("canvas");
+            tmpCanvas.width = imageData.width;
+            tmpCanvas.height = imageData.height;
+            const tmpContext = tmpCanvas.getContext("2d");
+            tmpContext.putImageData(imageData, 0, 0);
+            document.getElementById("preview").innerHTML = "";
+            document.getElementById("preview").appendChild(tmpCanvas);
+            scanning = false;
+            const result = await Swal.fire({
+              title: `Do you want to save the image? <img src="${tmpCanvas.toDataURL()}"/>`,
+              showDenyButton: true,
+              showCancelButton: true,
+              confirmButtonText: "Yes",
+              denyButtonText: "No",
+              customClass: {
+                actions: "my-actions",
+                cancelButton: "order-1 right-gap",
+                confirmButton: "order-2",
+                denyButton: "order-3",
+              },
+            });
+            if (result.isConfirmed) {
+              Swal.fire("Saved!", "", "success");
+            } else if (result.isDenied) {
+              Swal.fire("Changes are not saved", "", "info");
+            }
+            scanning = true;
+            while (scanning) {
+              await detectCard();
+              await new Promise((r) => setTimeout(r, 50));
+            }
+          };
+          function drawBoundingBox(context, bbox, color = "transparent") {
+            context.beginPath();
+            context.rect(bbox[0], bbox[1], bbox[2], bbox[3]);
+            context.strokeStyle = color; // Set the bounding box color
+            context.lineWidth = 2; // Set the bounding box line width
+            context.stroke();
+            context.closePath();
+          }
+
+          function previewCapturedImage(dataUrl) {
+            const container = document.getElementById("preview");
+            const image = document.getElementById("preview-img");
+            image.src = dataUrl;
+            document.getElementById("camera-section").style("display", "none");
+            container.style("display", "block");
+          }
+          async function detectCard() {
+            context.drawImage(
+              video,
+              0,
+              0,
+              video.clientWidth,
+              video.clientHeight
+            );
+            const imageData = context.getImageData(
+              xRatio,
+              yRatio,
+              widthRatio,
+              heightRatio
+            );
+            // const img = new Image();
+            // img.src = "./assets/img/outline-front-1.png";
+            // img.onload = function () {
+            //   // Draw the image onto the canvas at coordinates (0, 0)
+            //   context.drawImage(img, xRatio, yRatio, widthRatio, heightRatio);
+            // };
+            canvas = document.getElementById("crop-frame");
+            context = canvas.getContext("2d");
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            drawBoundingBox(
+              document.getElementById("crop-frame").getContext("2d"),
+              [xRatio, yRatio, widthRatio, heightRatio],
+              "transparent"
+            );
+            const predictions = await model.detect(imageData);
+            await predictions.forEach(async (prediction) => {
+              const bbox = prediction.bbox;
+              if (prediction.class == "book") {
+                count += 1;
+                if (count >= 5) {
+                  drawBoundingBox(context, [
+                    bbox[0] + xRatio,
+                    bbox[1] + yRatio,
+                    bbox[2],
+                    bbox[3],
+                  ]);
+                  await previewImageData(imageData);
+                  scanning = false;
+                } else {
+                  document.getElementById("countdown").innerText = `${
+                    5 - count
+                  }`;
+                }
+              } else {
+                count = 0;
+                document.getElementById("countdown").innerText = "";
+              }
+            });
+            // Process predictions to check for card presence
+            // Capture the frame if a card is detected
+          }
+          while (scanning) {
+            await detectCard();
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        });
+      };
+      drawVideo();
+    </script>
+  </body>
+</html>
